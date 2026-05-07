@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+data/
+*.db
+*.db-journal
+.DS_Store
+*.egg-info/
+out_preview.png

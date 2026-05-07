@@ -1,0 +1,106 @@
+daily_snapshot:
+  # Hyperliquid universe is ~230 perps. Cap the parsed count.
+  fetch_limit: 250
+  # Drop coins whose 24h notional volume is below this (USD). Filters out
+  # the long tail of illiquid perps where the % change is noise.
+  min_volume_24h_usd: 5000000   # $5M
+
+  # Number of rows in each card section.
+  longs_count: 3
+  shorts_count: 3
+  sectors_count: 3
+
+  discord_color: 0x3fb950          # green-ish accent
+  enable_discord: true
+  enable_x: true
+
+  # Render a 1200x720 PNG card and attach to Discord/X.
+  image_mode: true
+
+  # Auto-translate the per-coin row to short Japanese labels via Gemini.
+  # Cached in market_jp_label by lower-case ticker (slug).
+  enable_jp_translation: true
+  jp_translation_provider: gemini
+  jp_translation_model: gemini-2.5-flash-lite
+
+  # Coin → sector mapping. First match wins. Coin tickers are upper-case.
+  # Update when Hyperliquid adds new perps you care to bucket.
+  sector_map:
+    "L1 majors":
+      - BTC
+      - ETH
+      - SOL
+      - BNB
+      - AVAX
+      - SUI
+      - APT
+      - TON
+      - TRX
+      - ADA
+      - NEAR
+      - DOT
+      - ATOM
+    "L2 / scaling":
+      - ARB
+      - OP
+      - MATIC
+      - STRK
+      - ZK
+      - MNT
+      - BASE
+      - SCROLL
+      - METIS
+    "AI":
+      - TAO
+      - RNDR
+      - RENDER
+      - FET
+      - AGIX
+      - VIRTUAL
+      - AI16Z
+      - GRASS
+      - WLD
+      - PROMPT
+    "DeFi":
+      - AAVE
+      - UNI
+      - MKR
+      - CRV
+      - LDO
+      - JUP
+      - DYDX
+      - PENDLE
+      - ENA
+      - HYPE      # Hyperliquid native
+      - GMX
+      - SNX
+    "Memes":
+      - DOGE
+      - SHIB
+      - PEPE
+      - WIF
+      - BONK
+      - FLOKI
+      - POPCAT
+      - MEW
+      - TRUMP
+      - MELANIA
+      - BRETT
+      - FARTCOIN
+    "Gaming / NFT":
+      - IMX
+      - RON
+      - PIXEL
+      - BEAM
+      - ACE
+      - BLUR
+      - AXS
+      - GALA
+      - APE
+    "Other alts": []   # catch-all bucket
+
+  # Optional manual overrides: { lower_case_ticker: short_label }.
+  # Always win over the LLM cache + ticker fallback.
+  display_aliases: {}
+  #   btc: "BTC ビットコイン"
+  #   hype: "HYPE Hyperliquid"
