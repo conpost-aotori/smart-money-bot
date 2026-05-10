@@ -81,6 +81,7 @@ jobs:
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           LOG_LEVEL: INFO
           HYPERLIQUID_USER_AGENT: smart-money-bot/0.1 (+https://github.com/${{ github.repository }})
           HYPERLIQUID_INFO_BASE: https://api.hyperliquid.xyz
