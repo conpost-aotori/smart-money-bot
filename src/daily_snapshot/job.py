@@ -1,4 +1,24 @@
-"""Daily snapshot orchestrator: collect → format → post (Discord + X) → persist."""
+"""Daily snapshot orchestrator: collect → format → post (Discord + X) → persist.
+
+Resilience policy (mirrors btc_iv-bot):
+
+  Hyperliquid /info down:
+      Skip the run. Log + return, don't raise. Next cron (≤8h away) retries.
+
+  Discord webhook 4xx-or-5xx after retries:
+      Treat as soft failure for this run. Continue to X.
+
+  X API 4xx-or-5xx after retries:
+      Same as above. Continue.
+
+  BOTH Discord AND X failed in the same run:
+      Raise ``AllPostsFailedError`` so ``run_daily.py`` exits non-zero and
+      GitHub Actions sends a failure email.
+
+  One target succeeded, the other failed:
+      Treat as run success (exit 0). The next scheduled run will try the
+      flaky channel again.
+"""
 from __future__ import annotations
 
 import logging
@@ -26,6 +46,14 @@ from .x_client import XClient
 
 JST = ZoneInfo("Asia/Tokyo")
 log = logging.getLogger(__name__)
+
+
+class AllPostsFailedError(RuntimeError):
+    """Raised when every enabled posting target failed for this run.
+
+    Distinct from upstream-data outages (which we swallow): if data
+    arrived and we couldn't deliver it anywhere, that's worth notifying.
+    """
 
 
 def _persist(
@@ -79,16 +107,26 @@ def run(settings: Settings | None = None, *, ensure_schema: bool = True) -> None
     snapshot_date_str = now.strftime("%Y-%m-%d")
     log.info("daily snapshot for %s (dry_run=%s)", snapshot_date_str, settings.dry_run)
 
-    with HyperliquidClient(
-        info_base=settings.hyperliquid_info_base,
-        user_agent=settings.hyperliquid_user_agent,
-    ) as hl:
-        rows = collect_snapshot(
-            hl,
-            fetch_limit=cfg.fetch_limit,
-            min_volume_24h_usd=cfg.min_volume_24h_usd,
-            sector_map=cfg.sector_map,
+    # --- DATA: Hyperliquid is the only source for HL-specific OI/funding/
+    # vol-by-perp, so there's no real substitute on outage. The right policy
+    # is to skip this run gracefully — the next scheduled cron will retry.
+    try:
+        with HyperliquidClient(
+            info_base=settings.hyperliquid_info_base,
+            user_agent=settings.hyperliquid_user_agent,
+        ) as hl:
+            rows = collect_snapshot(
+                hl,
+                fetch_limit=cfg.fetch_limit,
+                min_volume_24h_usd=cfg.min_volume_24h_usd,
+                sector_map=cfg.sector_map,
+            )
+    except Exception as exc:
+        log.warning(
+            "hyperliquid /info unreachable (%s) — skipping this run; "
+            "next cron will retry", exc,
         )
+        return
 
     if not rows:
         log.warning("no perps after filtering — skipping post")
@@ -167,17 +205,29 @@ def run(settings: Settings | None = None, *, ensure_schema: bool = True) -> None
     finally:
         conn.close()
 
+    # --- POSTING: track per-channel success so partial outages don't fail
+    # the whole run. Both must fail before we surface an error.
+    discord_attempted = False
+    x_attempted = False
+    discord_ok = False
+    x_ok = False
+
     if cfg.enable_discord:
         webhook = settings.daily_snapshot_discord_webhook_url
         if not webhook and not settings.dry_run:
             log.warning("daily snapshot discord webhook not configured — skipping discord post")
         else:
-            with DiscordClient(webhook, dry_run=settings.dry_run) as dc:
-                if image_bytes is not None:
-                    dc.send(image_bytes=image_bytes, image_filename="snapshot.png")
-                else:
-                    dc.send(embeds=[embed] if embed else None)
-            log.info("discord posted (image=%s)", image_bytes is not None)
+            discord_attempted = True
+            try:
+                with DiscordClient(webhook, dry_run=settings.dry_run) as dc:
+                    if image_bytes is not None:
+                        dc.send(image_bytes=image_bytes, image_filename="snapshot.png")
+                    else:
+                        dc.send(embeds=[embed] if embed else None)
+                discord_ok = True
+                log.info("discord posted (image=%s)", image_bytes is not None)
+            except Exception as exc:
+                log.error("discord post failed after retries: %s", exc)
     else:
         log.info("discord disabled in settings")
 
@@ -193,10 +243,27 @@ def run(settings: Settings | None = None, *, ensure_schema: bool = True) -> None
         except (ValueError, ImportError) as exc:
             log.warning("x client unavailable: %s — skipping x post", exc)
         else:
-            xc.post(tweet_text, image_bytes=image_bytes)
-            log.info("x posted (image=%s)", image_bytes is not None)
+            x_attempted = True
+            try:
+                xc.post(tweet_text, image_bytes=image_bytes)
+                x_ok = True
+                log.info("x posted (image=%s)", image_bytes is not None)
+            except Exception as exc:
+                log.error("x post failed: %s", exc)
     else:
         log.info("x disabled in settings")
+
+    # If we attempted no targets at all (both disabled or no webhook), it's
+    # not a failure — that's an explicit configuration. If at least one
+    # target was attempted and ALL of them failed, raise so the runner
+    # surfaces it.
+    attempted = discord_attempted or x_attempted
+    any_ok = discord_ok or x_ok
+    if attempted and not any_ok:
+        raise AllPostsFailedError(
+            f"all posting targets failed (discord_attempted={discord_attempted}, "
+            f"x_attempted={x_attempted})"
+        )
 
 
 if __name__ == "__main__":

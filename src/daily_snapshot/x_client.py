@@ -3,6 +3,12 @@
 Tweet text uses the v2 endpoint (``client.create_tweet``); media upload
 requires the v1.1 endpoint (``api.media_upload``) since media v2 isn't
 available on Free/Basic tiers. Both auth from the same 4 OAuth1.0a secrets.
+
+Retry policy: a single transient failure (network blip, 429 rate limit,
+5xx server error from X infra) should not skip a daily run. We retry
+twice with exponential backoff before letting the exception propagate
+to the orchestrator, which then decides whether to fail the run based on
+the Discord side outcome.
 """
 from __future__ import annotations
 
@@ -10,7 +16,39 @@ import io
 import logging
 from typing import Any
 
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 log = logging.getLogger(__name__)
+
+
+def _is_retryable_x_error(exc: BaseException) -> bool:
+    """Tweepy raises subclasses of ``TweepyException`` that often carry the
+    underlying HTTP response. Retry on transient codes (429 / 5xx) and on
+    network-level errors that lack a status code; let auth/4xx propagate.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        # Network-level / no response → treat as transient.
+        return True
+    if status == 429:
+        return True
+    if 500 <= status < 600:
+        return True
+    return False
+
+
+_X_RETRY = retry(
+    retry=retry_if_exception(_is_retryable_x_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=8),
+    reraise=True,
+)
 
 
 class XClient:
@@ -53,6 +91,14 @@ class XClient:
             self._api = self._tweepy.API(self._auth)
         return self._api
 
+    @_X_RETRY
+    def _media_upload(self, *, filename: str, file_like: Any) -> Any:
+        return self._ensure_v1_api().media_upload(filename=filename, file=file_like)
+
+    @_X_RETRY
+    def _create_tweet(self, *, text: str, media_ids: list[str] | None) -> Any:
+        return self._client.create_tweet(text=text, media_ids=media_ids)
+
     def post(
         self,
         text: str,
@@ -72,22 +118,21 @@ class XClient:
 
         media_ids: list[str] | None = None
         if image_bytes is not None:
-            api = self._ensure_v1_api()
             try:
-                media = api.media_upload(
+                media = self._media_upload(
                     filename=image_filename,
-                    file=io.BytesIO(image_bytes),
+                    file_like=io.BytesIO(image_bytes),
                 )
             except Exception as exc:
-                log.error("x media upload failed: %s", exc)
+                log.error("x media upload failed after retries: %s", exc)
                 raise
             media_ids = [str(media.media_id)]
             log.info("x media uploaded: media_id=%s", media.media_id)
 
         try:
-            resp = self._client.create_tweet(text=text, media_ids=media_ids)
+            resp = self._create_tweet(text=text, media_ids=media_ids)
         except Exception as exc:
-            log.error("x post failed: %s", exc)
+            log.error("x tweet create failed after retries: %s", exc)
             raise
         data = getattr(resp, "data", None) or {}
         log.info("x tweet posted: id=%s", data.get("id"))
