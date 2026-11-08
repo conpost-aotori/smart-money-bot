@@ -119,7 +119,10 @@ Swap to taste — light theme: `BG=(245,247,250) TEXT=(20,24,33) DIM=(100,110,12
   (e.g. 🏛 CLASSICAL BUILDING) render as tofu via Twemoji — substitute
   with a more reliable equivalent (we use 🏦 for Macro).
 - **Japanese fonts.** GH `ubuntu-latest` doesn't ship CJK fonts; the workflow
-  installs `fonts-noto-cjk` at the start. Locally, Windows ships Yu Gothic.
+  downloads `NotoSansCJK-{Regular,Bold}.ttc` (the same files `fonts-noto-cjk`
+  installs) from the pinned upstream release into `/usr/share/fonts/opentype/noto`
+  at the start — apt's 61 MB package sometimes crawls from the Ubuntu mirror and
+  times the job out. Locally, Windows ships Yu Gothic.
 - **GH Actions cron drift.** Up to 15 min late under load. Acceptable for
   daily snapshots; not for tight-deadline triggers.
 - **X Free tier limits.** 17 tweets/24h, 1500/month. Daily snapshot at

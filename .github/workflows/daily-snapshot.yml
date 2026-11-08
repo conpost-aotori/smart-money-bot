@@ -50,11 +50,24 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       # Noto Sans CJK is needed for Japanese glyph rendering in the snapshot
-      # PNG. Pre-installed on ubuntu-latest? Not reliably — install it.
-      - name: Install Japanese font
+      # PNG (image_renderer.py loads /usr/share/fonts/opentype/noto/
+      # NotoSansCJK-{Bold,Regular}.ttc). Not pre-installed on ubuntu-latest.
+      # apt's fonts-noto-cjk (61 MB) sometimes crawls from the Ubuntu mirror and the
+      # job hits timeout-minutes before it can post. Fetch the same .ttc files from the
+      # pinned upstream release into the same path apt uses (paths/family names unchanged).
+      - name: Install Japanese font (Noto Sans CJK, from upstream release)
+        timeout-minutes: 4
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          set -euo pipefail
+          d=/usr/share/fonts/opentype/noto
+          sudo mkdir -p "$d"
+          base=https://github.com/notofonts/noto-cjk/raw/Sans2.004/Sans/OTC
+          for f in NotoSansCJK-Regular.ttc NotoSansCJK-Bold.ttc; do
+            sudo curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors --max-time 120 -o "$d/$f" "$base/$f"
+          done
+          sudo fc-cache -f >/dev/null
+          # grep without -q reads to EOF, so fc-list never gets SIGPIPE under pipefail
+          fc-list | grep -F "Noto Sans CJK JP" >/dev/null || { echo "::error::Noto Sans CJK JP not registered"; exit 1; }
 
       - name: Install
         run: pip install -e .
